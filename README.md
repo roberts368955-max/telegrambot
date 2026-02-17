@@ -11,7 +11,8 @@ Android app for MetaTrader 5 style position sizing.
 - Quick presets:
   - Forex majors (EURUSD-like)
   - Metals (XAUUSD typical)
-  - Crypto CFD (BTCUSD typical)
+  - Metals (XAGUSD typical)
+  - Crypto CFD (BTCUSD / ETHUSD 10 coins per lot common)
   - Custom symbol
 - Risk mode options:
   - Risk % of balance
@@ -24,27 +25,29 @@ Android app for MetaTrader 5 style position sizing.
   - Requested risk and actual risk
   - Raw lot and normalized lot
   - SL/TP distance (ticks or price distance, depending on mode)
-  - SL cost per 1 lot
+  - Gross SL move, costs, effective risk and effective reward per lot
   - TP price, expected reward, and actual R:R
 
 ## Core logic
 
 ### MT5 Tick Value mode
 
-- `slTicks = ceil(abs(entry - sl) / tickSize)`
-- `tpTicks = floor(abs(tp - entry) / tickSize)`
+- `slTicks = (abs(entry - sl) + spread) / tickSize`
+- `tpTicks = max(abs(tp - entry) - spread, 0) / tickSize`
 - `stopLossCostPerLot = slTicks * tickValueLoss`
 - `rewardPerLot = tpTicks * tickValueProfit`
 
 ### Contract Size mode
 
 - `valuePerPriceUnitPerLot = contractSize * conversionRate`
-- `stopLossCostPerLot = abs(entry - sl) * valuePerPriceUnitPerLot`
-- `rewardPerLot = abs(tp - entry) * valuePerPriceUnitPerLot`
+- `stopLossCostPerLot = (abs(entry - sl) + spread) * valuePerPriceUnitPerLot`
+- `rewardPerLot = max(abs(tp - entry) - spread, 0) * valuePerPriceUnitPerLot`
 
 Then:
 
-- `rawLot = requestedRiskAmount / stopLossCostPerLot`
+- `effectiveRiskPerLot = stopLossCostPerLot + commissionPerLot + extraCostsPerLot`
+- `effectiveRewardPerLot = rewardPerLot - commissionPerLot - extraCostsPerLot`
+- `rawLot = requestedRiskAmount / effectiveRiskPerLot`
 - `normalizedLot` is adjusted to broker min/step/max
 
 ## Build APK
@@ -95,6 +98,8 @@ For best results, copy values from **MT5 Symbol Specification**:
 - Tick Value Loss
 - Tick Value Profit
 - Contract Size
+- Spread (approx)
+- Commission (round-turn) and extra fees/swaps
 - Volume min/step/max
 
 If account currency is different from quote currency, set conversion rate accordingly in Contract Size mode.
