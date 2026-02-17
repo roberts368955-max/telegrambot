@@ -1,0 +1,1217 @@
+package com.example.lotcalculator
+
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.isSystemInDarkTheme
+import java.math.BigDecimal
+import java.util.Locale
+import kotlin.math.abs
+import kotlin.math.floor
+import kotlin.math.max
+
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContent {
+            val darkTheme = isSystemInDarkTheme()
+            val colors = if (darkTheme) {
+                darkColorScheme()
+            } else {
+                lightColorScheme()
+            }
+            MaterialTheme(colorScheme = colors) {
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = MaterialTheme.colorScheme.background
+                ) {
+                    LotCalculatorScreen()
+                }
+            }
+        }
+    }
+}
+
+private enum class TradeSide(val label: String) {
+    BUY("Buy"),
+    SELL("Sell")
+}
+
+private enum class RiskMode(val label: String) {
+    PERCENT("Risk % of balance"),
+    FIXED_CURRENCY("Fixed SL in currency")
+}
+
+private enum class TakeProfitMode(val label: String) {
+    FIXED_RR("Fixed R:R"),
+    MANUAL_PRICE("Manual TP price")
+}
+
+private enum class ValuationMode(val label: String) {
+    MT5_TICK_VALUE("MT5 Tick Value (loss/profit)"),
+    CONTRACT_SIZE("Contract Size + conversion")
+}
+
+private enum class PositionSizeMode(val label: String) {
+    AUTO_FROM_RISK("Auto lot from risk"),
+    FIXED_LOT("Use fixed lot")
+}
+
+private enum class SizingAdjustmentMode(val label: String) {
+    PRICE_ONLY("Price move only (quick style)"),
+    INCLUDE_SPREAD_AND_COSTS("Include spread + costs")
+}
+
+private enum class CommissionMode(val label: String) {
+    NONE("No commission"),
+    FIXED_PER_LOT("Fixed amount per 1.0 lot"),
+    PERCENT_NOTIONAL("Percent of notional")
+}
+
+private data class SymbolPresetValues(
+    val tickSize: String,
+    val tickValueLoss: String,
+    val tickValueProfit: String,
+    val contractSize: String,
+    val conversionRate: String,
+    val minLot: String,
+    val lotStep: String,
+    val maxLot: String
+)
+
+private enum class SymbolPreset(
+    val label: String,
+    val values: SymbolPresetValues?
+) {
+    FOREX_MAJOR(
+        label = "Forex majors (EURUSD-like)",
+        values = SymbolPresetValues(
+            tickSize = "0.00001",
+            tickValueLoss = "1",
+            tickValueProfit = "1",
+            contractSize = "100000",
+            conversionRate = "1",
+            minLot = "0.01",
+            lotStep = "0.01",
+            maxLot = "100"
+        )
+    ),
+    XAUUSD(
+        label = "XAUUSD (FTMO style)",
+        values = SymbolPresetValues(
+            tickSize = "0.01",
+            tickValueLoss = "1",
+            tickValueProfit = "1",
+            contractSize = "100",
+            conversionRate = "1",
+            minLot = "0.01",
+            lotStep = "0.01",
+            maxLot = "10"
+        )
+    ),
+    BTCUSD(
+        label = "BTCUSD (FTMO style)",
+        values = SymbolPresetValues(
+            tickSize = "0.01",
+            tickValueLoss = "0.01",
+            tickValueProfit = "0.01",
+            contractSize = "1",
+            conversionRate = "1",
+            minLot = "0.01",
+            lotStep = "0.01",
+            maxLot = "5"
+        )
+    ),
+    ETHUSD(
+        label = "ETHUSD (FTMO style)",
+        values = SymbolPresetValues(
+            tickSize = "0.01",
+            tickValueLoss = "0.1",
+            tickValueProfit = "0.1",
+            contractSize = "10",
+            conversionRate = "1",
+            minLot = "0.01",
+            lotStep = "0.01",
+            maxLot = "5"
+        )
+    ),
+    XAGUSD(
+        label = "XAGUSD (FTMO style)",
+        values = SymbolPresetValues(
+            tickSize = "0.001",
+            tickValueLoss = "5",
+            tickValueProfit = "5",
+            contractSize = "5000",
+            conversionRate = "1",
+            minLot = "0.01",
+            lotStep = "0.01",
+            maxLot = "10"
+        )
+    ),
+    CUSTOM(
+        label = "Custom symbol",
+        values = null
+    )
+}
+
+private data class Mt5LotCalculation(
+    val requestedRiskAmount: Double,
+    val recommendedLotSize: Double,
+    val selectedLotSize: Double,
+    val actualRiskAmount: Double,
+    val riskDifferenceFromTarget: Double,
+    val stopLossCostPerLot: Double,
+    val totalCostsPerLot: Double,
+    val effectiveRiskPerLot: Double,
+    val effectiveRewardPerLot: Double,
+    val actualRiskPercentOfBalance: Double?,
+    val stopLossDistanceDisplay: Double,
+    val takeProfitDistanceDisplay: Double,
+    val distanceUnitLabel: String,
+    val rawLotSize: Double,
+    val takeProfitPrice: Double,
+    val expectedRewardAmount: Double,
+    val actualRr: Double,
+    val positionSizeMode: PositionSizeMode,
+    val valuationMode: ValuationMode,
+    val sizingAdjustmentMode: SizingAdjustmentMode,
+    val warnings: List<String>
+)
+
+@Composable
+private fun LotCalculatorScreen() {
+    var symbolPresetName by rememberSaveable { mutableStateOf(SymbolPreset.FOREX_MAJOR.name) }
+    var tradeSideName by rememberSaveable { mutableStateOf(TradeSide.BUY.name) }
+    var riskModeName by rememberSaveable { mutableStateOf(RiskMode.PERCENT.name) }
+    var positionSizeModeName by rememberSaveable { mutableStateOf(PositionSizeMode.AUTO_FROM_RISK.name) }
+    var sizingAdjustmentModeName by rememberSaveable { mutableStateOf(SizingAdjustmentMode.PRICE_ONLY.name) }
+    var tpModeName by rememberSaveable { mutableStateOf(TakeProfitMode.FIXED_RR.name) }
+    var valuationModeName by rememberSaveable { mutableStateOf(ValuationMode.CONTRACT_SIZE.name) }
+
+    var balanceInput by rememberSaveable { mutableStateOf("10000") }
+    var riskPercentInput by rememberSaveable { mutableStateOf("1") }
+    var fixedRiskInput by rememberSaveable { mutableStateOf("100") }
+
+    var entryPriceInput by rememberSaveable { mutableStateOf("1.10000") }
+    var stopLossPriceInput by rememberSaveable { mutableStateOf("1.09500") }
+    var spreadInput by rememberSaveable { mutableStateOf("0") }
+    var rrInput by rememberSaveable { mutableStateOf("2") }
+    var manualTpPriceInput by rememberSaveable { mutableStateOf("1.11000") }
+    var fixedLotInput by rememberSaveable { mutableStateOf("0.45") }
+
+    var tickSizeInput by rememberSaveable { mutableStateOf("0.00001") }
+    var tickValueLossInput by rememberSaveable { mutableStateOf("1") }
+    var tickValueProfitInput by rememberSaveable { mutableStateOf("1") }
+    var contractSizeInput by rememberSaveable { mutableStateOf("100000") }
+    var conversionRateInput by rememberSaveable { mutableStateOf("1") }
+    var commissionModeName by rememberSaveable { mutableStateOf(CommissionMode.NONE.name) }
+    var commissionPerLotInput by rememberSaveable { mutableStateOf("0") }
+    var commissionPercentInput by rememberSaveable { mutableStateOf("0") }
+    var commissionCurrencyRateInput by rememberSaveable { mutableStateOf("1") }
+    var extraCostsPerLotInput by rememberSaveable { mutableStateOf("0") }
+
+    var minLotInput by rememberSaveable { mutableStateOf("0.01") }
+    var lotStepInput by rememberSaveable { mutableStateOf("0.01") }
+    var maxLotInput by rememberSaveable { mutableStateOf("100") }
+
+    var calculationResult by remember { mutableStateOf<Mt5LotCalculation?>(null) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.Top
+    ) {
+        Text(
+            text = "MT5 Lot Calculator",
+            style = MaterialTheme.typography.headlineMedium,
+            fontWeight = FontWeight.Bold
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = "Supports forex, metals and crypto with MT5-aware sizing.",
+            style = MaterialTheme.typography.bodyMedium
+        )
+
+        Spacer(modifier = Modifier.height(20.dp))
+        SectionTitle("Quick Symbol Preset")
+        EnumSelector(
+            options = SymbolPreset.entries.map { it.name to it.label },
+            selectedName = symbolPresetName,
+            onSelect = { selectedName ->
+                symbolPresetName = selectedName
+                val preset = SymbolPreset.valueOf(selectedName)
+                val values = preset.values
+                if (values != null) {
+                    tickSizeInput = values.tickSize
+                    tickValueLossInput = values.tickValueLoss
+                    tickValueProfitInput = values.tickValueProfit
+                    contractSizeInput = values.contractSize
+                    conversionRateInput = values.conversionRate
+                    minLotInput = values.minLot
+                    lotStepInput = values.lotStep
+                    maxLotInput = values.maxLot
+                }
+                when (preset) {
+                    SymbolPreset.ETHUSD,
+                    SymbolPreset.BTCUSD -> {
+                        valuationModeName = ValuationMode.CONTRACT_SIZE.name
+                        commissionModeName = CommissionMode.PERCENT_NOTIONAL.name
+                        commissionPercentInput = "0.0325"
+                        commissionCurrencyRateInput = "1"
+                    }
+
+                    SymbolPreset.XAUUSD,
+                    SymbolPreset.XAGUSD -> {
+                        valuationModeName = ValuationMode.CONTRACT_SIZE.name
+                        commissionModeName = CommissionMode.PERCENT_NOTIONAL.name
+                        commissionPercentInput = "0.0007"
+                        commissionCurrencyRateInput = "1"
+                    }
+
+                    SymbolPreset.FOREX_MAJOR -> {
+                        valuationModeName = ValuationMode.CONTRACT_SIZE.name
+                        commissionModeName = CommissionMode.NONE.name
+                        commissionPercentInput = "0"
+                        commissionCurrencyRateInput = "1"
+                    }
+
+                    SymbolPreset.CUSTOM -> Unit
+                }
+            }
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+        SectionTitle("Trade Setup")
+        EnumSelector(
+            options = TradeSide.entries.map { it.name to it.label },
+            selectedName = tradeSideName,
+            onSelect = { tradeSideName = it }
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+        NumericInputField(
+            value = entryPriceInput,
+            onValueChange = { entryPriceInput = it },
+            label = "Entry Price",
+            placeholder = "e.g. 1.10000"
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+        NumericInputField(
+            value = stopLossPriceInput,
+            onValueChange = { stopLossPriceInput = it },
+            label = "Stop Loss Price",
+            placeholder = "e.g. 1.09500"
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+        NumericInputField(
+            value = spreadInput,
+            onValueChange = { spreadInput = it },
+            label = "Approx spread (price units)",
+            placeholder = "e.g. 0.6 on ETHUSD, 0 on idealized backtest"
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+        SectionTitle("Risk Mode")
+        EnumSelector(
+            options = RiskMode.entries.map { it.name to it.label },
+            selectedName = riskModeName,
+            onSelect = { riskModeName = it }
+        )
+
+        if (RiskMode.valueOf(riskModeName) == RiskMode.PERCENT) {
+            Spacer(modifier = Modifier.height(8.dp))
+            NumericInputField(
+                value = balanceInput,
+                onValueChange = { balanceInput = it },
+                label = "Account Balance",
+                placeholder = "e.g. 10000"
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            NumericInputField(
+                value = riskPercentInput,
+                onValueChange = { riskPercentInput = it },
+                label = "Risk % per trade",
+                placeholder = "e.g. 1"
+            )
+        } else {
+            Spacer(modifier = Modifier.height(8.dp))
+            NumericInputField(
+                value = fixedRiskInput,
+                onValueChange = { fixedRiskInput = it },
+                label = "Fixed SL in currency",
+                placeholder = "e.g. 100"
+            )
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+        SectionTitle("Lot Mode")
+        EnumSelector(
+            options = PositionSizeMode.entries.map { it.name to it.label },
+            selectedName = positionSizeModeName,
+            onSelect = { positionSizeModeName = it }
+        )
+
+        if (PositionSizeMode.valueOf(positionSizeModeName) == PositionSizeMode.FIXED_LOT) {
+            Spacer(modifier = Modifier.height(8.dp))
+            NumericInputField(
+                value = fixedLotInput,
+                onValueChange = { fixedLotInput = it },
+                label = "Fixed Lot",
+                placeholder = "e.g. 0.45"
+            )
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+        SectionTitle("Sizing Adjustments")
+        EnumSelector(
+            options = SizingAdjustmentMode.entries.map { it.name to it.label },
+            selectedName = sizingAdjustmentModeName,
+            onSelect = { sizingAdjustmentModeName = it }
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+        SectionTitle("Take Profit")
+        EnumSelector(
+            options = TakeProfitMode.entries.map { it.name to it.label },
+            selectedName = tpModeName,
+            onSelect = { tpModeName = it }
+        )
+
+        if (TakeProfitMode.valueOf(tpModeName) == TakeProfitMode.FIXED_RR) {
+            Spacer(modifier = Modifier.height(8.dp))
+            NumericInputField(
+                value = rrInput,
+                onValueChange = { rrInput = it },
+                label = "R:R Ratio (reward side)",
+                placeholder = "e.g. 2 means 1:2"
+            )
+        } else {
+            Spacer(modifier = Modifier.height(8.dp))
+            NumericInputField(
+                value = manualTpPriceInput,
+                onValueChange = { manualTpPriceInput = it },
+                label = "Manual TP Price",
+                placeholder = "e.g. 1.11000"
+            )
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+        SectionTitle("Symbol Valuation Model")
+        EnumSelector(
+            options = ValuationMode.entries.map { it.name to it.label },
+            selectedName = valuationModeName,
+            onSelect = { valuationModeName = it }
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+        NumericInputField(
+            value = tickSizeInput,
+            onValueChange = { tickSizeInput = it },
+            label = "Tick Size",
+            placeholder = "e.g. 0.00001 or 0.01"
+        )
+
+        val valuationMode = ValuationMode.valueOf(valuationModeName)
+        if (valuationMode == ValuationMode.MT5_TICK_VALUE) {
+            Spacer(modifier = Modifier.height(12.dp))
+            NumericInputField(
+                value = tickValueLossInput,
+                onValueChange = { tickValueLossInput = it },
+                label = "Tick Value Loss (1.0 lot)",
+                placeholder = "from MT5 symbol specification"
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+            NumericInputField(
+                value = tickValueProfitInput,
+                onValueChange = { tickValueProfitInput = it },
+                label = "Tick Value Profit (1.0 lot)",
+                placeholder = "from MT5 symbol specification"
+            )
+        } else {
+            Spacer(modifier = Modifier.height(12.dp))
+            NumericInputField(
+                value = contractSizeInput,
+                onValueChange = { contractSizeInput = it },
+                label = "Contract Size (1.0 lot)",
+                placeholder = "e.g. 100000 forex, 100 XAU, 1 BTC CFD"
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+            NumericInputField(
+                value = conversionRateInput,
+                onValueChange = { conversionRateInput = it },
+                label = "Quote->Account currency conversion",
+                placeholder = "1 if already same currency"
+            )
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+        SectionTitle("Costs (for net match with history)")
+        EnumSelector(
+            options = CommissionMode.entries.map { it.name to it.label },
+            selectedName = commissionModeName,
+            onSelect = { commissionModeName = it }
+        )
+
+        when (CommissionMode.valueOf(commissionModeName)) {
+            CommissionMode.NONE -> Unit
+            CommissionMode.FIXED_PER_LOT -> {
+                Spacer(modifier = Modifier.height(12.dp))
+                NumericInputField(
+                    value = commissionPerLotInput,
+                    onValueChange = { commissionPerLotInput = it },
+                    label = "Commission per 1.0 lot (round-turn)",
+                    placeholder = "0 if no commission"
+                )
+            }
+
+            CommissionMode.PERCENT_NOTIONAL -> {
+                Spacer(modifier = Modifier.height(12.dp))
+                NumericInputField(
+                    value = commissionPercentInput,
+                    onValueChange = { commissionPercentInput = it },
+                    label = "Commission % of notional (round-turn)",
+                    placeholder = "e.g. 0.0325"
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                NumericInputField(
+                    value = commissionCurrencyRateInput,
+                    onValueChange = { commissionCurrencyRateInput = it },
+                    label = "Commission currency -> account conversion",
+                    placeholder = "1 when same currency"
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+        NumericInputField(
+            value = extraCostsPerLotInput,
+            onValueChange = { extraCostsPerLotInput = it },
+            label = "Swap + extra fees per 1.0 lot",
+            placeholder = "0 if ignored"
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+        SectionTitle("Broker Volume Limits")
+        NumericInputField(
+            value = minLotInput,
+            onValueChange = { minLotInput = it },
+            label = "Min Lot",
+            placeholder = "e.g. 0.01"
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+        NumericInputField(
+            value = lotStepInput,
+            onValueChange = { lotStepInput = it },
+            label = "Lot Step",
+            placeholder = "e.g. 0.01"
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+        NumericInputField(
+            value = maxLotInput,
+            onValueChange = { maxLotInput = it },
+            label = "Max Lot",
+            placeholder = "e.g. 100"
+        )
+
+        Spacer(modifier = Modifier.height(20.dp))
+        Button(
+            onClick = {
+                errorMessage = null
+                calculationResult = null
+
+                val tradeSide = TradeSide.valueOf(tradeSideName)
+                val riskMode = RiskMode.valueOf(riskModeName)
+                val positionSizeMode = PositionSizeMode.valueOf(positionSizeModeName)
+                val sizingAdjustmentMode = SizingAdjustmentMode.valueOf(sizingAdjustmentModeName)
+                val commissionMode = CommissionMode.valueOf(commissionModeName)
+                val tpMode = TakeProfitMode.valueOf(tpModeName)
+                val selectedValuationMode = ValuationMode.valueOf(valuationModeName)
+
+                val entryPrice = parsePositiveNumber(entryPriceInput)
+                val stopLossPrice = parsePositiveNumber(stopLossPriceInput)
+                val spread = parseNonNegativeNumber(spreadInput)
+                val tickSize = parsePositiveNumber(tickSizeInput)
+                val minLot = parsePositiveNumber(minLotInput)
+                val lotStep = parsePositiveNumber(lotStepInput)
+                val maxLot = parsePositiveNumber(maxLotInput)
+                val fixedCommissionPerLot = if (commissionMode == CommissionMode.FIXED_PER_LOT) {
+                    parseNonNegativeNumber(commissionPerLotInput)
+                } else {
+                    0.0
+                }
+                val commissionPercent = if (commissionMode == CommissionMode.PERCENT_NOTIONAL) {
+                    parseNonNegativeNumber(commissionPercentInput)
+                } else {
+                    null
+                }
+                val commissionCurrencyRate = if (commissionMode == CommissionMode.PERCENT_NOTIONAL) {
+                    parsePositiveNumber(commissionCurrencyRateInput)
+                } else {
+                    null
+                }
+                val extraCostsPerLot = parseNonNegativeNumber(extraCostsPerLotInput)
+
+                if (
+                    entryPrice == null ||
+                    stopLossPrice == null ||
+                    spread == null ||
+                    tickSize == null ||
+                    minLot == null ||
+                    lotStep == null ||
+                    maxLot == null ||
+                    extraCostsPerLot == null
+                ) {
+                    errorMessage = "Please enter valid values for all required fields."
+                    return@Button
+                }
+
+                if (fixedCommissionPerLot == null) {
+                    errorMessage = "Please enter a valid fixed commission value."
+                    return@Button
+                }
+                if (commissionMode == CommissionMode.PERCENT_NOTIONAL && (commissionPercent == null || commissionCurrencyRate == null)) {
+                    errorMessage = "Please enter valid commission percent and conversion values."
+                    return@Button
+                }
+
+                if (maxLot < minLot) {
+                    errorMessage = "Max lot must be greater than or equal to min lot."
+                    return@Button
+                }
+
+                if (lotStep > maxLot) {
+                    errorMessage = "Lot step cannot be greater than max lot."
+                    return@Button
+                }
+
+                if (tradeSide == TradeSide.BUY && stopLossPrice >= entryPrice) {
+                    errorMessage = "For BUY, stop loss price must be below entry price."
+                    return@Button
+                }
+
+                if (tradeSide == TradeSide.SELL && stopLossPrice <= entryPrice) {
+                    errorMessage = "For SELL, stop loss price must be above entry price."
+                    return@Button
+                }
+
+                var balanceReference: Double? = null
+                val requestedRiskAmount = when (riskMode) {
+                    RiskMode.PERCENT -> {
+                        val balance = parsePositiveNumber(balanceInput)
+                        val riskPercent = parsePositiveNumber(riskPercentInput)
+                        if (balance == null || riskPercent == null) {
+                            errorMessage = "Please enter valid balance and risk % values."
+                            return@Button
+                        }
+                        balanceReference = balance
+                        balance * (riskPercent / 100.0)
+                    }
+
+                    RiskMode.FIXED_CURRENCY -> {
+                        val fixedRisk = parsePositiveNumber(fixedRiskInput)
+                        if (fixedRisk == null) {
+                            errorMessage = "Please enter a valid fixed SL currency value."
+                            return@Button
+                        }
+                        fixedRisk
+                    }
+                }
+
+                val fixedLot = if (positionSizeMode == PositionSizeMode.FIXED_LOT) {
+                    parsePositiveNumber(fixedLotInput) ?: run {
+                        errorMessage = "Please enter a valid fixed lot value."
+                        return@Button
+                    }
+                } else {
+                    null
+                }
+
+                val stopLossDistance = abs(entryPrice - stopLossPrice)
+                val takeProfitPrice = when (tpMode) {
+                    TakeProfitMode.FIXED_RR -> {
+                        val rr = parsePositiveNumber(rrInput)
+                        if (rr == null) {
+                            errorMessage = "Please enter a valid R:R ratio greater than zero."
+                            return@Button
+                        }
+                        if (tradeSide == TradeSide.BUY) {
+                            entryPrice + stopLossDistance * rr
+                        } else {
+                            entryPrice - stopLossDistance * rr
+                        }
+                    }
+
+                    TakeProfitMode.MANUAL_PRICE -> {
+                        val manualTp = parsePositiveNumber(manualTpPriceInput)
+                        if (manualTp == null) {
+                            errorMessage = "Please enter a valid manual TP price."
+                            return@Button
+                        }
+                        if (tradeSide == TradeSide.BUY && manualTp <= entryPrice) {
+                            errorMessage = "For BUY, TP price must be above entry price."
+                            return@Button
+                        }
+                        if (tradeSide == TradeSide.SELL && manualTp >= entryPrice) {
+                            errorMessage = "For SELL, TP price must be below entry price."
+                            return@Button
+                        }
+                        manualTp
+                    }
+                }
+
+                val tpDistance = abs(takeProfitPrice - entryPrice)
+                val spreadApplied = if (sizingAdjustmentMode == SizingAdjustmentMode.INCLUDE_SPREAD_AND_COSTS) {
+                    spread
+                } else {
+                    0.0
+                }
+                val stopLossDistanceForValidation = stopLossDistance + spreadApplied
+                val tpDistanceForValidation = max(tpDistance - spreadApplied, 0.0)
+
+                if (selectedValuationMode == ValuationMode.MT5_TICK_VALUE) {
+                    if (stopLossDistanceForValidation < tickSize) {
+                        errorMessage = "SL distance must be at least one tick for MT5 tick-value mode."
+                        return@Button
+                    }
+                    if (tpDistanceForValidation < tickSize) {
+                        errorMessage = "TP distance must be at least one tick for MT5 tick-value mode."
+                        return@Button
+                    }
+                }
+
+                val tickValueLoss = if (selectedValuationMode == ValuationMode.MT5_TICK_VALUE) {
+                    parsePositiveNumber(tickValueLossInput) ?: run {
+                        errorMessage = "Enter valid Tick Value Loss for MT5 mode."
+                        return@Button
+                    }
+                } else {
+                    null
+                }
+
+                val tickValueProfit = if (selectedValuationMode == ValuationMode.MT5_TICK_VALUE) {
+                    parsePositiveNumber(tickValueProfitInput) ?: run {
+                        errorMessage = "Enter valid Tick Value Profit for MT5 mode."
+                        return@Button
+                    }
+                } else {
+                    null
+                }
+
+                val contractSize = if (
+                    selectedValuationMode == ValuationMode.CONTRACT_SIZE ||
+                    commissionMode == CommissionMode.PERCENT_NOTIONAL
+                ) {
+                    parsePositiveNumber(contractSizeInput) ?: run {
+                        errorMessage = "Enter valid contract size."
+                        return@Button
+                    }
+                } else {
+                    null
+                }
+
+                val conversionRate = if (
+                    selectedValuationMode == ValuationMode.CONTRACT_SIZE ||
+                    commissionMode == CommissionMode.PERCENT_NOTIONAL
+                ) {
+                    parsePositiveNumber(conversionRateInput) ?: run {
+                        errorMessage = "Enter valid quote->account conversion rate."
+                        return@Button
+                    }
+                } else {
+                    null
+                }
+
+                calculationResult = calculateMt5Lot(
+                    requestedRiskAmount = requestedRiskAmount,
+                    entryPrice = entryPrice,
+                    stopLossPrice = stopLossPrice,
+                    takeProfitPrice = takeProfitPrice,
+                    valuationMode = selectedValuationMode,
+                    tickSize = tickSize,
+                    tickValueLoss = tickValueLoss,
+                    tickValueProfit = tickValueProfit,
+                    contractSize = contractSize,
+                    conversionRate = conversionRate,
+                    positionSizeMode = positionSizeMode,
+                    fixedLot = fixedLot,
+                    sizingAdjustmentMode = sizingAdjustmentMode,
+                    spread = spread,
+                    commissionMode = commissionMode,
+                    fixedCommissionPerLot = fixedCommissionPerLot,
+                    commissionPercent = commissionPercent,
+                    commissionCurrencyRate = commissionCurrencyRate,
+                    extraCostsPerLot = extraCostsPerLot,
+                    accountBalanceForRiskPercent = balanceReference,
+                    minLot = minLot,
+                    maxLot = maxLot,
+                    lotStep = lotStep
+                )
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Calculate Lot Size")
+        }
+
+        if (errorMessage != null) {
+            Spacer(modifier = Modifier.height(16.dp))
+            Text(
+                text = errorMessage.orEmpty(),
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodyMedium
+            )
+        }
+
+        val result = calculationResult
+        if (result != null) {
+            Spacer(modifier = Modifier.height(16.dp))
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "Result",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Valuation Model: ${result.valuationMode.label}",
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                    Text(
+                        text = "Lot Mode: ${result.positionSizeMode.label}",
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                    Text(
+                        text = "Adjustment Mode: ${result.sizingAdjustmentMode.label}",
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                    Text(
+                        text = "Requested Risk: ${formatValue(result.requestedRiskAmount)}",
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                    Text(
+                        text = "Recommended Lot (from risk): ${formatValue(result.recommendedLotSize, 4)}",
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                    Text(
+                        text = "Selected Lot: ${formatValue(result.selectedLotSize, 4)}",
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "Risk at Selected Lot: ${formatValue(result.actualRiskAmount)}",
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                    Text(
+                        text = "Risk Difference vs Target: ${formatSignedValue(result.riskDifferenceFromTarget)}",
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                    if (result.actualRiskPercentOfBalance != null) {
+                        Text(
+                            text = "Risk % at selected lot: ${formatValue(result.actualRiskPercentOfBalance, 2)}%",
+                            style = MaterialTheme.typography.bodyLarge
+                        )
+                    }
+                    Text(
+                        text = "Gross SL move cost per 1.0 lot: ${formatValue(result.stopLossCostPerLot)}",
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                    Text(
+                        text = "Costs per 1.0 lot (commission+fees): ${formatValue(result.totalCostsPerLot)}",
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                    Text(
+                        text = "Effective risk per 1.0 lot: ${formatValue(result.effectiveRiskPerLot)}",
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                    Text(
+                        text = "Effective reward per 1.0 lot: ${formatValue(result.effectiveRewardPerLot)}",
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                    Text(
+                        text = "SL Distance Used: ${formatValue(result.stopLossDistanceDisplay, 2)} ${result.distanceUnitLabel}",
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                    Text(
+                        text = "TP Distance Used: ${formatValue(result.takeProfitDistanceDisplay, 2)} ${result.distanceUnitLabel}",
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                    Text(
+                        text = "Raw Recommended Lot: ${formatValue(result.rawLotSize, 4)}",
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                    Text(
+                        text = "Take Profit Price: ${formatPrice(result.takeProfitPrice, tickSizeInput)}",
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                    Text(
+                        text = "TP Value at Selected Lot: ${formatValue(result.expectedRewardAmount)}",
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                    Text(
+                        text = "Actual R:R = 1:${formatValue(result.actualRr, 2)}",
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+
+                    if (result.warnings.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = result.warnings.joinToString(separator = "\n"),
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SectionTitle(title: String) {
+    Text(
+        text = title,
+        style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.SemiBold
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun EnumSelector(
+    options: List<Pair<String, String>>,
+    selectedName: String,
+    onSelect: (String) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val selectedLabel = options.firstOrNull { it.first == selectedName }?.second ?: selectedName
+
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = !expanded }
+    ) {
+        OutlinedTextField(
+            value = selectedLabel,
+            onValueChange = {},
+            readOnly = true,
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            modifier = Modifier
+                .menuAnchor()
+                .fillMaxWidth()
+        )
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false }
+        ) {
+            options.forEach { (name, label) ->
+                DropdownMenuItem(
+                    text = { Text(label) },
+                    onClick = {
+                        onSelect(name)
+                        expanded = false
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun NumericInputField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+    placeholder: String
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        label = { Text(label) },
+        placeholder = { Text(placeholder) },
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth()
+    )
+}
+
+private fun parsePositiveNumber(rawValue: String): Double? {
+    val normalized = rawValue.trim().replace(",", ".")
+    val parsed = normalized.toDoubleOrNull() ?: return null
+    return parsed.takeIf { it > 0.0 }
+}
+
+private fun parseNonNegativeNumber(rawValue: String): Double? {
+    val normalized = rawValue.trim().replace(",", ".")
+    val parsed = normalized.toDoubleOrNull() ?: return null
+    return parsed.takeIf { it >= 0.0 }
+}
+
+private fun calculateMt5Lot(
+    requestedRiskAmount: Double,
+    entryPrice: Double,
+    stopLossPrice: Double,
+    takeProfitPrice: Double,
+    valuationMode: ValuationMode,
+    tickSize: Double,
+    tickValueLoss: Double?,
+    tickValueProfit: Double?,
+    contractSize: Double?,
+    conversionRate: Double?,
+    positionSizeMode: PositionSizeMode,
+    fixedLot: Double?,
+    sizingAdjustmentMode: SizingAdjustmentMode,
+    spread: Double,
+    commissionMode: CommissionMode,
+    fixedCommissionPerLot: Double,
+    commissionPercent: Double?,
+    commissionCurrencyRate: Double?,
+    extraCostsPerLot: Double,
+    accountBalanceForRiskPercent: Double?,
+    minLot: Double,
+    maxLot: Double,
+    lotStep: Double
+): Mt5LotCalculation {
+    val warnings = mutableListOf<String>()
+    val includeAdjustments = sizingAdjustmentMode == SizingAdjustmentMode.INCLUDE_SPREAD_AND_COSTS
+    val spreadUsed = if (includeAdjustments) spread else 0.0
+
+    val slDistancePrice = abs(entryPrice - stopLossPrice) + spreadUsed
+    val tpDistancePrice = max(abs(takeProfitPrice - entryPrice) - spreadUsed, 0.0)
+
+    val stopLossCostPerLot: Double
+    val rewardPerLot: Double
+    val slDistanceDisplay: Double
+    val tpDistanceDisplay: Double
+    val distanceUnitLabel: String
+
+    if (valuationMode == ValuationMode.MT5_TICK_VALUE) {
+        val safeTickValueLoss = tickValueLoss ?: 0.0
+        val safeTickValueProfit = tickValueProfit ?: 0.0
+
+        val rawSlTicks = slDistancePrice / tickSize
+        val rawTpTicks = tpDistancePrice / tickSize
+        val nearestSlTick = floor(rawSlTicks + 0.5)
+        val nearestTpTick = floor(rawTpTicks + 0.5)
+
+        if (abs(rawSlTicks - nearestSlTick) > 1e-6) {
+            warnings += "SL distance is not aligned to full ticks."
+        }
+        if (abs(rawTpTicks - nearestTpTick) > 1e-6) {
+            warnings += "TP distance is not aligned to full ticks."
+        }
+        if (rawTpTicks <= 0.0) {
+            warnings += "TP distance is very small after spread; expected reward may be near 0."
+        }
+
+        stopLossCostPerLot = rawSlTicks * safeTickValueLoss
+        rewardPerLot = rawTpTicks * safeTickValueProfit
+        slDistanceDisplay = rawSlTicks
+        tpDistanceDisplay = rawTpTicks
+        distanceUnitLabel = "ticks"
+    } else {
+        val safeContractSize = contractSize ?: 0.0
+        val safeConversionRate = conversionRate ?: 0.0
+        val valuePerPriceUnit = safeContractSize * safeConversionRate
+
+        stopLossCostPerLot = slDistancePrice * valuePerPriceUnit
+        rewardPerLot = tpDistancePrice * valuePerPriceUnit
+        slDistanceDisplay = slDistancePrice
+        tpDistanceDisplay = tpDistancePrice
+        distanceUnitLabel = "price"
+    }
+
+    val commissionPerLot = when (commissionMode) {
+        CommissionMode.NONE -> 0.0
+        CommissionMode.FIXED_PER_LOT -> fixedCommissionPerLot
+        CommissionMode.PERCENT_NOTIONAL -> {
+            val safeContractSize = contractSize ?: 0.0
+            val safeQuoteToAccountRate = conversionRate ?: 1.0
+            val safeCommissionPercent = commissionPercent ?: 0.0
+            val safeCommissionCurrencyRate = commissionCurrencyRate ?: 1.0
+            val notionalAccount = entryPrice * safeContractSize * safeQuoteToAccountRate
+            (notionalAccount * (safeCommissionPercent / 100.0)) * safeCommissionCurrencyRate
+        }
+    }
+
+    val totalCostsPerLot = commissionPerLot + extraCostsPerLot
+    val appliedCostsPerLot = if (includeAdjustments) totalCostsPerLot else 0.0
+    val effectiveRiskPerLot = stopLossCostPerLot + appliedCostsPerLot
+    val effectiveRewardPerLot = rewardPerLot - appliedCostsPerLot
+
+    if (includeAdjustments && spread > 0.0) {
+        warnings += "Spread was included in sizing."
+    }
+    if (!includeAdjustments && spread > 0.0) {
+        warnings += "Spread is ignored in current sizing mode."
+    }
+    if (!includeAdjustments && totalCostsPerLot > 0.0) {
+        warnings += "Commission/fees are ignored in current sizing mode."
+    }
+    if (effectiveRewardPerLot <= 0.0) {
+        warnings += "TP value per lot is <= 0 with current settings."
+    }
+
+    val rawRecommendedLot = requestedRiskAmount / effectiveRiskPerLot
+    val (recommendedLot, lotWarnings) = normalizeLotSize(
+        rawLot = rawRecommendedLot,
+        minLot = minLot,
+        maxLot = maxLot,
+        lotStep = lotStep
+    )
+    warnings += lotWarnings
+
+    val selectedLot = if (positionSizeMode == PositionSizeMode.AUTO_FROM_RISK) {
+        recommendedLot
+    } else {
+        val fixed = fixedLot ?: minLot
+        val (normalizedFixedLot, fixedWarnings) = normalizeLotSize(
+            rawLot = fixed,
+            minLot = minLot,
+            maxLot = maxLot,
+            lotStep = lotStep
+        )
+        if (abs(normalizedFixedLot - fixed) > 1e-9) {
+            warnings += "Fixed lot was adjusted to broker min/step/max."
+        }
+        warnings += fixedWarnings
+        normalizedFixedLot
+    }
+
+    val actualRiskAmount = effectiveRiskPerLot * selectedLot
+    val expectedRewardAmount = effectiveRewardPerLot * selectedLot
+    val riskDifferenceFromTarget = actualRiskAmount - requestedRiskAmount
+    val actualRiskPercentOfBalance = accountBalanceForRiskPercent?.let { balance ->
+        if (balance > 0.0) (actualRiskAmount / balance) * 100.0 else null
+    }
+    val actualRr = if (actualRiskAmount > 0.0) {
+        expectedRewardAmount / actualRiskAmount
+    } else {
+        0.0
+    }
+
+    return Mt5LotCalculation(
+        requestedRiskAmount = requestedRiskAmount,
+        recommendedLotSize = recommendedLot,
+        selectedLotSize = selectedLot,
+        actualRiskAmount = actualRiskAmount,
+        riskDifferenceFromTarget = riskDifferenceFromTarget,
+        stopLossCostPerLot = stopLossCostPerLot,
+        totalCostsPerLot = totalCostsPerLot,
+        effectiveRiskPerLot = effectiveRiskPerLot,
+        effectiveRewardPerLot = effectiveRewardPerLot,
+        actualRiskPercentOfBalance = actualRiskPercentOfBalance,
+        stopLossDistanceDisplay = slDistanceDisplay,
+        takeProfitDistanceDisplay = tpDistanceDisplay,
+        distanceUnitLabel = distanceUnitLabel,
+        rawLotSize = rawRecommendedLot,
+        takeProfitPrice = takeProfitPrice,
+        expectedRewardAmount = expectedRewardAmount,
+        actualRr = actualRr,
+        positionSizeMode = positionSizeMode,
+        valuationMode = valuationMode,
+        sizingAdjustmentMode = sizingAdjustmentMode,
+        warnings = warnings
+    )
+}
+
+private fun normalizeLotSize(
+    rawLot: Double,
+    minLot: Double,
+    maxLot: Double,
+    lotStep: Double
+): Pair<Double, List<String>> {
+    val warnings = mutableListOf<String>()
+    var boundedLot = rawLot
+
+    if (rawLot < minLot) {
+        warnings += "Calculated lot is below broker minimum. Minimum lot applied."
+        boundedLot = minLot
+    } else if (rawLot > maxLot) {
+        warnings += "Calculated lot is above broker maximum. Maximum lot applied."
+        boundedLot = maxLot
+    }
+
+    val stepsFromMin = floor((boundedLot - minLot) / lotStep + 1e-9)
+    val roundedLot = (minLot + max(stepsFromMin, 0.0) * lotStep).coerceIn(minLot, maxLot)
+
+    if (roundedLot + 1e-9 < boundedLot) {
+        warnings += "Lot was rounded down to match lot step."
+    }
+
+    return roundedLot to warnings
+}
+
+private fun formatValue(value: Double, decimals: Int = 2): String {
+    return String.format(Locale.US, "%,.${decimals}f", value)
+}
+
+private fun formatSignedValue(value: Double, decimals: Int = 2): String {
+    val sign = if (value >= 0.0) "+" else "-"
+    return sign + formatValue(abs(value), decimals)
+}
+
+private fun formatPrice(price: Double, tickSizeInput: String): String {
+    val tickSize = parsePositiveNumber(tickSizeInput)
+    val decimals = tickSize?.let { decimalPlacesForIncrement(it) } ?: 5
+    return String.format(Locale.US, "%.${decimals}f", price)
+}
+
+private fun decimalPlacesForIncrement(increment: Double): Int {
+    return BigDecimal.valueOf(increment)
+        .stripTrailingZeros()
+        .scale()
+        .coerceAtLeast(0)
+        .coerceAtMost(8)
+}
+
+@Preview(showBackground = true)
+@Composable
+private fun LotCalculatorPreview() {
+    MaterialTheme {
+        Surface {
+            LotCalculatorScreen()
+        }
+    }
+}
