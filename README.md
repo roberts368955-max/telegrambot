@@ -68,6 +68,20 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 If you copy APK manually to the phone, enable install from unknown sources for your file manager.
 
+## Build APK on GitHub (no local SDK needed)
+
+A workflow is included at:
+
+`.github/workflows/build-debug-apk.yml`
+
+How to use it:
+
+1. Push your changes.
+2. Open the repository on GitHub.
+3. Go to **Actions** -> **Build Debug APK**.
+4. Run workflow (or use the run created by push).
+5. Download artifact: `mt5-lot-calculator-debug-apk`.
+
 ## Release APK (signed)
 
 Unsigned release build:
