@@ -74,6 +74,16 @@ private enum class ValuationMode(val label: String) {
     CONTRACT_SIZE("Contract Size + conversion")
 }
 
+private enum class PositionSizeMode(val label: String) {
+    AUTO_FROM_RISK("Auto lot from risk"),
+    FIXED_LOT("Use fixed lot")
+}
+
+private enum class SizingAdjustmentMode(val label: String) {
+    PRICE_ONLY("Price move only (quick style)"),
+    INCLUDE_SPREAD_AND_COSTS("Include spread + costs")
+}
+
 private data class SymbolPresetValues(
     val tickSize: String,
     val tickValueLoss: String,
@@ -162,20 +172,24 @@ private enum class SymbolPreset(
 
 private data class Mt5LotCalculation(
     val requestedRiskAmount: Double,
+    val recommendedLotSize: Double,
+    val selectedLotSize: Double,
     val actualRiskAmount: Double,
+    val riskDifferenceFromTarget: Double,
     val stopLossCostPerLot: Double,
     val totalCostsPerLot: Double,
     val effectiveRiskPerLot: Double,
     val effectiveRewardPerLot: Double,
+    val actualRiskPercentOfBalance: Double?,
     val stopLossDistanceDisplay: Double,
     val takeProfitDistanceDisplay: Double,
     val distanceUnitLabel: String,
     val rawLotSize: Double,
-    val normalizedLotSize: Double,
     val takeProfitPrice: Double,
     val expectedRewardAmount: Double,
     val actualRr: Double,
     val valuationMode: ValuationMode,
+    val sizingAdjustmentMode: SizingAdjustmentMode,
     val warnings: List<String>
 )
 
@@ -184,6 +198,8 @@ private fun LotCalculatorScreen() {
     var symbolPresetName by rememberSaveable { mutableStateOf(SymbolPreset.FOREX_MAJOR.name) }
     var tradeSideName by rememberSaveable { mutableStateOf(TradeSide.BUY.name) }
     var riskModeName by rememberSaveable { mutableStateOf(RiskMode.PERCENT.name) }
+    var positionSizeModeName by rememberSaveable { mutableStateOf(PositionSizeMode.AUTO_FROM_RISK.name) }
+    var sizingAdjustmentModeName by rememberSaveable { mutableStateOf(SizingAdjustmentMode.PRICE_ONLY.name) }
     var tpModeName by rememberSaveable { mutableStateOf(TakeProfitMode.FIXED_RR.name) }
     var valuationModeName by rememberSaveable { mutableStateOf(ValuationMode.MT5_TICK_VALUE.name) }
 
@@ -196,6 +212,7 @@ private fun LotCalculatorScreen() {
     var spreadInput by rememberSaveable { mutableStateOf("0") }
     var rrInput by rememberSaveable { mutableStateOf("2") }
     var manualTpPriceInput by rememberSaveable { mutableStateOf("1.11000") }
+    var fixedLotInput by rememberSaveable { mutableStateOf("0.45") }
 
     var tickSizeInput by rememberSaveable { mutableStateOf("0.00001") }
     var tickValueLossInput by rememberSaveable { mutableStateOf("1") }
@@ -316,6 +333,32 @@ private fun LotCalculatorScreen() {
                 placeholder = "e.g. 100"
             )
         }
+
+        Spacer(modifier = Modifier.height(12.dp))
+        SectionTitle("Lot Mode")
+        EnumSelector(
+            options = PositionSizeMode.entries.map { it.name to it.label },
+            selectedName = positionSizeModeName,
+            onSelect = { positionSizeModeName = it }
+        )
+
+        if (PositionSizeMode.valueOf(positionSizeModeName) == PositionSizeMode.FIXED_LOT) {
+            Spacer(modifier = Modifier.height(8.dp))
+            NumericInputField(
+                value = fixedLotInput,
+                onValueChange = { fixedLotInput = it },
+                label = "Fixed Lot",
+                placeholder = "e.g. 0.45"
+            )
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+        SectionTitle("Sizing Adjustments")
+        EnumSelector(
+            options = SizingAdjustmentMode.entries.map { it.name to it.label },
+            selectedName = sizingAdjustmentModeName,
+            onSelect = { sizingAdjustmentModeName = it }
+        )
 
         Spacer(modifier = Modifier.height(12.dp))
         SectionTitle("Take Profit")
@@ -444,6 +487,8 @@ private fun LotCalculatorScreen() {
 
                 val tradeSide = TradeSide.valueOf(tradeSideName)
                 val riskMode = RiskMode.valueOf(riskModeName)
+                val positionSizeMode = PositionSizeMode.valueOf(positionSizeModeName)
+                val sizingAdjustmentMode = SizingAdjustmentMode.valueOf(sizingAdjustmentModeName)
                 val tpMode = TakeProfitMode.valueOf(tpModeName)
                 val selectedValuationMode = ValuationMode.valueOf(valuationModeName)
 
@@ -492,6 +537,7 @@ private fun LotCalculatorScreen() {
                     return@Button
                 }
 
+                var balanceReference: Double? = null
                 val requestedRiskAmount = when (riskMode) {
                     RiskMode.PERCENT -> {
                         val balance = parsePositiveNumber(balanceInput)
@@ -500,6 +546,7 @@ private fun LotCalculatorScreen() {
                             errorMessage = "Please enter valid balance and risk % values."
                             return@Button
                         }
+                        balanceReference = balance
                         balance * (riskPercent / 100.0)
                     }
 
@@ -513,8 +560,16 @@ private fun LotCalculatorScreen() {
                     }
                 }
 
+                val fixedLot = if (positionSizeMode == PositionSizeMode.FIXED_LOT) {
+                    parsePositiveNumber(fixedLotInput) ?: run {
+                        errorMessage = "Please enter a valid fixed lot value."
+                        return@Button
+                    }
+                } else {
+                    null
+                }
+
                 val stopLossDistance = abs(entryPrice - stopLossPrice)
-                val stopLossDistanceForRisk = stopLossDistance + spread
                 val takeProfitPrice = when (tpMode) {
                     TakeProfitMode.FIXED_RR -> {
                         val rr = parsePositiveNumber(rrInput)
@@ -548,17 +603,20 @@ private fun LotCalculatorScreen() {
                 }
 
                 val tpDistance = abs(takeProfitPrice - entryPrice)
-                val tpDistanceNet = tpDistance - spread
-                if (tpDistanceNet <= 0.0) {
-                    errorMessage = "TP distance must be greater than spread to have net reward."
-                    return@Button
+                val spreadApplied = if (sizingAdjustmentMode == SizingAdjustmentMode.INCLUDE_SPREAD_AND_COSTS) {
+                    spread
+                } else {
+                    0.0
                 }
+                val stopLossDistanceForValidation = stopLossDistance + spreadApplied
+                val tpDistanceForValidation = max(tpDistance - spreadApplied, 0.0)
+
                 if (selectedValuationMode == ValuationMode.MT5_TICK_VALUE) {
-                    if (stopLossDistanceForRisk < tickSize) {
+                    if (stopLossDistanceForValidation < tickSize) {
                         errorMessage = "SL distance must be at least one tick for MT5 tick-value mode."
                         return@Button
                     }
-                    if (tpDistanceNet < tickSize) {
+                    if (tpDistanceForValidation < tickSize) {
                         errorMessage = "TP distance must be at least one tick for MT5 tick-value mode."
                         return@Button
                     }
@@ -611,9 +669,13 @@ private fun LotCalculatorScreen() {
                     tickValueProfit = tickValueProfit,
                     contractSize = contractSize,
                     conversionRate = conversionRate,
+                    positionSizeMode = positionSizeMode,
+                    fixedLot = fixedLot,
+                    sizingAdjustmentMode = sizingAdjustmentMode,
                     spread = spread,
                     commissionPerLot = commissionPerLot,
                     extraCostsPerLot = extraCostsPerLot,
+                    accountBalanceForRiskPercent = balanceReference,
                     minLot = minLot,
                     maxLot = maxLot,
                     lotStep = lotStep
@@ -649,13 +711,36 @@ private fun LotCalculatorScreen() {
                         style = MaterialTheme.typography.bodyLarge
                     )
                     Text(
+                        text = "Sizing Mode: ${result.sizingAdjustmentMode.label}",
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                    Text(
                         text = "Requested Risk: ${formatValue(result.requestedRiskAmount)}",
                         style = MaterialTheme.typography.bodyLarge
                     )
                     Text(
-                        text = "Actual Risk (normalized lot): ${formatValue(result.actualRiskAmount)}",
+                        text = "Recommended Lot (from risk): ${formatValue(result.recommendedLotSize, 4)}",
                         style = MaterialTheme.typography.bodyLarge
                     )
+                    Text(
+                        text = "Selected Lot: ${formatValue(result.selectedLotSize, 4)}",
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "Risk at Selected Lot: ${formatValue(result.actualRiskAmount)}",
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                    Text(
+                        text = "Risk Difference vs Target: ${formatSignedValue(result.riskDifferenceFromTarget)}",
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                    if (result.actualRiskPercentOfBalance != null) {
+                        Text(
+                            text = "Risk % at selected lot: ${formatValue(result.actualRiskPercentOfBalance, 2)}%",
+                            style = MaterialTheme.typography.bodyLarge
+                        )
+                    }
                     Text(
                         text = "Gross SL move cost per 1.0 lot: ${formatValue(result.stopLossCostPerLot)}",
                         style = MaterialTheme.typography.bodyLarge
@@ -673,28 +758,23 @@ private fun LotCalculatorScreen() {
                         style = MaterialTheme.typography.bodyLarge
                     )
                     Text(
-                        text = "SL Distance (incl spread): ${formatValue(result.stopLossDistanceDisplay, 2)} ${result.distanceUnitLabel}",
+                        text = "SL Distance Used: ${formatValue(result.stopLossDistanceDisplay, 2)} ${result.distanceUnitLabel}",
                         style = MaterialTheme.typography.bodyLarge
                     )
                     Text(
-                        text = "TP Distance (net of spread): ${formatValue(result.takeProfitDistanceDisplay, 2)} ${result.distanceUnitLabel}",
+                        text = "TP Distance Used: ${formatValue(result.takeProfitDistanceDisplay, 2)} ${result.distanceUnitLabel}",
                         style = MaterialTheme.typography.bodyLarge
                     )
                     Text(
-                        text = "Raw Lot Size: ${formatValue(result.rawLotSize, 4)}",
+                        text = "Raw Recommended Lot: ${formatValue(result.rawLotSize, 4)}",
                         style = MaterialTheme.typography.bodyLarge
-                    )
-                    Text(
-                        text = "Normalized Lot Size: ${formatValue(result.normalizedLotSize, 4)}",
-                        style = MaterialTheme.typography.bodyLarge,
-                        fontWeight = FontWeight.Bold
                     )
                     Text(
                         text = "Take Profit Price: ${formatPrice(result.takeProfitPrice, tickSizeInput)}",
                         style = MaterialTheme.typography.bodyLarge
                     )
                     Text(
-                        text = "Expected Reward: ${formatValue(result.expectedRewardAmount)}",
+                        text = "TP Value at Selected Lot: ${formatValue(result.expectedRewardAmount)}",
                         style = MaterialTheme.typography.bodyLarge
                     )
                     Text(
@@ -791,16 +871,23 @@ private fun calculateMt5Lot(
     tickValueProfit: Double?,
     contractSize: Double?,
     conversionRate: Double?,
+    positionSizeMode: PositionSizeMode,
+    fixedLot: Double?,
+    sizingAdjustmentMode: SizingAdjustmentMode,
     spread: Double,
     commissionPerLot: Double,
     extraCostsPerLot: Double,
+    accountBalanceForRiskPercent: Double?,
     minLot: Double,
     maxLot: Double,
     lotStep: Double
 ): Mt5LotCalculation {
     val warnings = mutableListOf<String>()
-    val slDistancePrice = abs(entryPrice - stopLossPrice) + spread
-    val tpDistancePrice = max(abs(takeProfitPrice - entryPrice) - spread, 0.0)
+    val includeAdjustments = sizingAdjustmentMode == SizingAdjustmentMode.INCLUDE_SPREAD_AND_COSTS
+    val spreadUsed = if (includeAdjustments) spread else 0.0
+
+    val slDistancePrice = abs(entryPrice - stopLossPrice) + spreadUsed
+    val tpDistancePrice = max(abs(takeProfitPrice - entryPrice) - spreadUsed, 0.0)
 
     val stopLossCostPerLot: Double
     val rewardPerLot: Double
@@ -845,27 +932,55 @@ private fun calculateMt5Lot(
     }
 
     val totalCostsPerLot = commissionPerLot + extraCostsPerLot
-    val effectiveRiskPerLot = stopLossCostPerLot + totalCostsPerLot
-    val effectiveRewardPerLot = rewardPerLot - totalCostsPerLot
+    val appliedCostsPerLot = if (includeAdjustments) totalCostsPerLot else 0.0
+    val effectiveRiskPerLot = stopLossCostPerLot + appliedCostsPerLot
+    val effectiveRewardPerLot = rewardPerLot - appliedCostsPerLot
 
-    if (spread > 0.0) {
-        warnings += "Spread was included in risk/reward distance."
+    if (includeAdjustments && spread > 0.0) {
+        warnings += "Spread was included in sizing."
+    }
+    if (!includeAdjustments && spread > 0.0) {
+        warnings += "Spread is ignored in current sizing mode."
+    }
+    if (!includeAdjustments && totalCostsPerLot > 0.0) {
+        warnings += "Commission/fees are ignored in current sizing mode."
     }
     if (effectiveRewardPerLot <= 0.0) {
-        warnings += "Net reward per lot is <= 0 after costs."
+        warnings += "TP value per lot is <= 0 with current settings."
     }
 
-    val rawLotSize = requestedRiskAmount / effectiveRiskPerLot
-    val (normalizedLot, lotWarnings) = normalizeLotSize(
-        rawLot = rawLotSize,
+    val rawRecommendedLot = requestedRiskAmount / effectiveRiskPerLot
+    val (recommendedLot, lotWarnings) = normalizeLotSize(
+        rawLot = rawRecommendedLot,
         minLot = minLot,
         maxLot = maxLot,
         lotStep = lotStep
     )
     warnings += lotWarnings
 
-    val actualRiskAmount = effectiveRiskPerLot * normalizedLot
-    val expectedRewardAmount = effectiveRewardPerLot * normalizedLot
+    val selectedLot = if (positionSizeMode == PositionSizeMode.AUTO_FROM_RISK) {
+        recommendedLot
+    } else {
+        val fixed = fixedLot ?: minLot
+        val (normalizedFixedLot, fixedWarnings) = normalizeLotSize(
+            rawLot = fixed,
+            minLot = minLot,
+            maxLot = maxLot,
+            lotStep = lotStep
+        )
+        if (abs(normalizedFixedLot - fixed) > 1e-9) {
+            warnings += "Fixed lot was adjusted to broker min/step/max."
+        }
+        warnings += fixedWarnings
+        normalizedFixedLot
+    }
+
+    val actualRiskAmount = effectiveRiskPerLot * selectedLot
+    val expectedRewardAmount = effectiveRewardPerLot * selectedLot
+    val riskDifferenceFromTarget = actualRiskAmount - requestedRiskAmount
+    val actualRiskPercentOfBalance = accountBalanceForRiskPercent?.let { balance ->
+        if (balance > 0.0) (actualRiskAmount / balance) * 100.0 else null
+    }
     val actualRr = if (actualRiskAmount > 0.0) {
         expectedRewardAmount / actualRiskAmount
     } else {
@@ -874,20 +989,24 @@ private fun calculateMt5Lot(
 
     return Mt5LotCalculation(
         requestedRiskAmount = requestedRiskAmount,
+        recommendedLotSize = recommendedLot,
+        selectedLotSize = selectedLot,
         actualRiskAmount = actualRiskAmount,
+        riskDifferenceFromTarget = riskDifferenceFromTarget,
         stopLossCostPerLot = stopLossCostPerLot,
         totalCostsPerLot = totalCostsPerLot,
         effectiveRiskPerLot = effectiveRiskPerLot,
         effectiveRewardPerLot = effectiveRewardPerLot,
+        actualRiskPercentOfBalance = actualRiskPercentOfBalance,
         stopLossDistanceDisplay = slDistanceDisplay,
         takeProfitDistanceDisplay = tpDistanceDisplay,
         distanceUnitLabel = distanceUnitLabel,
-        rawLotSize = rawLotSize,
-        normalizedLotSize = normalizedLot,
+        rawLotSize = rawRecommendedLot,
         takeProfitPrice = takeProfitPrice,
         expectedRewardAmount = expectedRewardAmount,
         actualRr = actualRr,
         valuationMode = valuationMode,
+        sizingAdjustmentMode = sizingAdjustmentMode,
         warnings = warnings
     )
 }
@@ -921,6 +1040,11 @@ private fun normalizeLotSize(
 
 private fun formatValue(value: Double, decimals: Int = 2): String {
     return String.format(Locale.US, "%,.${decimals}f", value)
+}
+
+private fun formatSignedValue(value: Double, decimals: Int = 2): String {
+    val sign = if (value >= 0.0) "+" else "-"
+    return sign + formatValue(abs(value), decimals)
 }
 
 private fun formatPrice(price: Double, tickSizeInput: String): String {

@@ -17,16 +17,23 @@ Android app for MetaTrader 5 style position sizing.
 - Risk mode options:
   - Risk % of balance
   - Fixed SL in currency
+- Lot mode options:
+  - Auto lot from risk
+  - Fixed lot (manual)
+- Sizing adjustment mode:
+  - Price move only (quick style)
+  - Include spread + costs
 - Take profit options:
   - Fixed R:R
   - Manual TP price
 - Buy / Sell validation for SL and TP placement
 - Output includes:
   - Requested risk and actual risk
-  - Raw lot and normalized lot
+  - Recommended lot and selected lot
+  - Risk difference vs target
   - SL/TP distance (ticks or price distance, depending on mode)
   - Gross SL move, costs, effective risk and effective reward per lot
-  - TP price, expected reward, and actual R:R
+  - TP exit price, TP value in currency, and actual R:R
 
 ## Core logic
 
@@ -49,6 +56,8 @@ Then:
 - `effectiveRewardPerLot = rewardPerLot - commissionPerLot - extraCostsPerLot`
 - `rawLot = requestedRiskAmount / effectiveRiskPerLot`
 - `normalizedLot` is adjusted to broker min/step/max
+
+When **Price move only** mode is selected, spread and costs are ignored in sizing (closer to quick calculators).
 
 ## Build APK
 
