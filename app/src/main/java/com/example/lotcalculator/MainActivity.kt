@@ -3,10 +3,8 @@ package com.example.lotcalculator
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -17,24 +15,29 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenu
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.isSystemInDarkTheme
 import java.math.BigDecimal
 import java.util.Locale
 import kotlin.math.abs
@@ -45,8 +48,17 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            MaterialTheme {
-                Surface(modifier = Modifier.fillMaxSize()) {
+            val darkTheme = isSystemInDarkTheme()
+            val colors = if (darkTheme) {
+                darkColorScheme()
+            } else {
+                lightColorScheme()
+            }
+            MaterialTheme(colorScheme = colors) {
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = MaterialTheme.colorScheme.background
+                ) {
                     LotCalculatorScreen()
                 }
             }
@@ -84,6 +96,12 @@ private enum class SizingAdjustmentMode(val label: String) {
     INCLUDE_SPREAD_AND_COSTS("Include spread + costs")
 }
 
+private enum class CommissionMode(val label: String) {
+    NONE("No commission"),
+    FIXED_PER_LOT("Fixed amount per 1.0 lot"),
+    PERCENT_NOTIONAL("Percent of notional")
+}
+
 private data class SymbolPresetValues(
     val tickSize: String,
     val tickValueLoss: String,
@@ -113,7 +131,7 @@ private enum class SymbolPreset(
         )
     ),
     XAUUSD(
-        label = "Metals (XAUUSD typical)",
+        label = "XAUUSD (FTMO style)",
         values = SymbolPresetValues(
             tickSize = "0.01",
             tickValueLoss = "1",
@@ -122,24 +140,24 @@ private enum class SymbolPreset(
             conversionRate = "1",
             minLot = "0.01",
             lotStep = "0.01",
-            maxLot = "100"
+            maxLot = "10"
         )
     ),
     BTCUSD(
-        label = "Crypto CFD (BTCUSD, 10 coins/lot common)",
+        label = "BTCUSD (FTMO style)",
         values = SymbolPresetValues(
             tickSize = "0.01",
-            tickValueLoss = "0.1",
-            tickValueProfit = "0.1",
-            contractSize = "10",
+            tickValueLoss = "0.01",
+            tickValueProfit = "0.01",
+            contractSize = "1",
             conversionRate = "1",
             minLot = "0.01",
             lotStep = "0.01",
-            maxLot = "100"
+            maxLot = "5"
         )
     ),
     ETHUSD(
-        label = "Crypto CFD (ETHUSD, 10 coins/lot common)",
+        label = "ETHUSD (FTMO style)",
         values = SymbolPresetValues(
             tickSize = "0.01",
             tickValueLoss = "0.1",
@@ -148,11 +166,11 @@ private enum class SymbolPreset(
             conversionRate = "1",
             minLot = "0.01",
             lotStep = "0.01",
-            maxLot = "100"
+            maxLot = "5"
         )
     ),
     XAGUSD(
-        label = "Metals (XAGUSD, 5000 oz contract common)",
+        label = "XAGUSD (FTMO style)",
         values = SymbolPresetValues(
             tickSize = "0.001",
             tickValueLoss = "5",
@@ -161,7 +179,7 @@ private enum class SymbolPreset(
             conversionRate = "1",
             minLot = "0.01",
             lotStep = "0.01",
-            maxLot = "100"
+            maxLot = "10"
         )
     ),
     CUSTOM(
@@ -188,6 +206,7 @@ private data class Mt5LotCalculation(
     val takeProfitPrice: Double,
     val expectedRewardAmount: Double,
     val actualRr: Double,
+    val positionSizeMode: PositionSizeMode,
     val valuationMode: ValuationMode,
     val sizingAdjustmentMode: SizingAdjustmentMode,
     val warnings: List<String>
@@ -201,7 +220,7 @@ private fun LotCalculatorScreen() {
     var positionSizeModeName by rememberSaveable { mutableStateOf(PositionSizeMode.AUTO_FROM_RISK.name) }
     var sizingAdjustmentModeName by rememberSaveable { mutableStateOf(SizingAdjustmentMode.PRICE_ONLY.name) }
     var tpModeName by rememberSaveable { mutableStateOf(TakeProfitMode.FIXED_RR.name) }
-    var valuationModeName by rememberSaveable { mutableStateOf(ValuationMode.MT5_TICK_VALUE.name) }
+    var valuationModeName by rememberSaveable { mutableStateOf(ValuationMode.CONTRACT_SIZE.name) }
 
     var balanceInput by rememberSaveable { mutableStateOf("10000") }
     var riskPercentInput by rememberSaveable { mutableStateOf("1") }
@@ -219,7 +238,10 @@ private fun LotCalculatorScreen() {
     var tickValueProfitInput by rememberSaveable { mutableStateOf("1") }
     var contractSizeInput by rememberSaveable { mutableStateOf("100000") }
     var conversionRateInput by rememberSaveable { mutableStateOf("1") }
+    var commissionModeName by rememberSaveable { mutableStateOf(CommissionMode.NONE.name) }
     var commissionPerLotInput by rememberSaveable { mutableStateOf("0") }
+    var commissionPercentInput by rememberSaveable { mutableStateOf("0") }
+    var commissionCurrencyRateInput by rememberSaveable { mutableStateOf("1") }
     var extraCostsPerLotInput by rememberSaveable { mutableStateOf("0") }
 
     var minLotInput by rememberSaveable { mutableStateOf("0.01") }
@@ -265,6 +287,32 @@ private fun LotCalculatorScreen() {
                     minLotInput = values.minLot
                     lotStepInput = values.lotStep
                     maxLotInput = values.maxLot
+                }
+                when (preset) {
+                    SymbolPreset.ETHUSD,
+                    SymbolPreset.BTCUSD -> {
+                        valuationModeName = ValuationMode.CONTRACT_SIZE.name
+                        commissionModeName = CommissionMode.PERCENT_NOTIONAL.name
+                        commissionPercentInput = "0.0325"
+                        commissionCurrencyRateInput = "1"
+                    }
+
+                    SymbolPreset.XAUUSD,
+                    SymbolPreset.XAGUSD -> {
+                        valuationModeName = ValuationMode.CONTRACT_SIZE.name
+                        commissionModeName = CommissionMode.PERCENT_NOTIONAL.name
+                        commissionPercentInput = "0.0007"
+                        commissionCurrencyRateInput = "1"
+                    }
+
+                    SymbolPreset.FOREX_MAJOR -> {
+                        valuationModeName = ValuationMode.CONTRACT_SIZE.name
+                        commissionModeName = CommissionMode.NONE.name
+                        commissionPercentInput = "0"
+                        commissionCurrencyRateInput = "1"
+                    }
+
+                    SymbolPreset.CUSTOM -> Unit
                 }
             }
         )
@@ -439,12 +487,41 @@ private fun LotCalculatorScreen() {
 
         Spacer(modifier = Modifier.height(12.dp))
         SectionTitle("Costs (for net match with history)")
-        NumericInputField(
-            value = commissionPerLotInput,
-            onValueChange = { commissionPerLotInput = it },
-            label = "Commission per 1.0 lot (round-turn)",
-            placeholder = "0 if no commission"
+        EnumSelector(
+            options = CommissionMode.entries.map { it.name to it.label },
+            selectedName = commissionModeName,
+            onSelect = { commissionModeName = it }
         )
+
+        when (CommissionMode.valueOf(commissionModeName)) {
+            CommissionMode.NONE -> Unit
+            CommissionMode.FIXED_PER_LOT -> {
+                Spacer(modifier = Modifier.height(12.dp))
+                NumericInputField(
+                    value = commissionPerLotInput,
+                    onValueChange = { commissionPerLotInput = it },
+                    label = "Commission per 1.0 lot (round-turn)",
+                    placeholder = "0 if no commission"
+                )
+            }
+
+            CommissionMode.PERCENT_NOTIONAL -> {
+                Spacer(modifier = Modifier.height(12.dp))
+                NumericInputField(
+                    value = commissionPercentInput,
+                    onValueChange = { commissionPercentInput = it },
+                    label = "Commission % of notional (round-turn)",
+                    placeholder = "e.g. 0.0325"
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                NumericInputField(
+                    value = commissionCurrencyRateInput,
+                    onValueChange = { commissionCurrencyRateInput = it },
+                    label = "Commission currency -> account conversion",
+                    placeholder = "1 when same currency"
+                )
+            }
+        }
 
         Spacer(modifier = Modifier.height(12.dp))
         NumericInputField(
@@ -489,6 +566,7 @@ private fun LotCalculatorScreen() {
                 val riskMode = RiskMode.valueOf(riskModeName)
                 val positionSizeMode = PositionSizeMode.valueOf(positionSizeModeName)
                 val sizingAdjustmentMode = SizingAdjustmentMode.valueOf(sizingAdjustmentModeName)
+                val commissionMode = CommissionMode.valueOf(commissionModeName)
                 val tpMode = TakeProfitMode.valueOf(tpModeName)
                 val selectedValuationMode = ValuationMode.valueOf(valuationModeName)
 
@@ -499,7 +577,21 @@ private fun LotCalculatorScreen() {
                 val minLot = parsePositiveNumber(minLotInput)
                 val lotStep = parsePositiveNumber(lotStepInput)
                 val maxLot = parsePositiveNumber(maxLotInput)
-                val commissionPerLot = parseNonNegativeNumber(commissionPerLotInput)
+                val fixedCommissionPerLot = if (commissionMode == CommissionMode.FIXED_PER_LOT) {
+                    parseNonNegativeNumber(commissionPerLotInput)
+                } else {
+                    0.0
+                }
+                val commissionPercent = if (commissionMode == CommissionMode.PERCENT_NOTIONAL) {
+                    parseNonNegativeNumber(commissionPercentInput)
+                } else {
+                    null
+                }
+                val commissionCurrencyRate = if (commissionMode == CommissionMode.PERCENT_NOTIONAL) {
+                    parsePositiveNumber(commissionCurrencyRateInput)
+                } else {
+                    null
+                }
                 val extraCostsPerLot = parseNonNegativeNumber(extraCostsPerLotInput)
 
                 if (
@@ -510,10 +602,18 @@ private fun LotCalculatorScreen() {
                     minLot == null ||
                     lotStep == null ||
                     maxLot == null ||
-                    commissionPerLot == null ||
                     extraCostsPerLot == null
                 ) {
                     errorMessage = "Please enter valid values for all required fields."
+                    return@Button
+                }
+
+                if (fixedCommissionPerLot == null) {
+                    errorMessage = "Please enter a valid fixed commission value."
+                    return@Button
+                }
+                if (commissionMode == CommissionMode.PERCENT_NOTIONAL && (commissionPercent == null || commissionCurrencyRate == null)) {
+                    errorMessage = "Please enter valid commission percent and conversion values."
                     return@Button
                 }
 
@@ -640,16 +740,22 @@ private fun LotCalculatorScreen() {
                     null
                 }
 
-                val contractSize = if (selectedValuationMode == ValuationMode.CONTRACT_SIZE) {
+                val contractSize = if (
+                    selectedValuationMode == ValuationMode.CONTRACT_SIZE ||
+                    commissionMode == CommissionMode.PERCENT_NOTIONAL
+                ) {
                     parsePositiveNumber(contractSizeInput) ?: run {
-                        errorMessage = "Enter valid contract size for Contract Size mode."
+                        errorMessage = "Enter valid contract size."
                         return@Button
                     }
                 } else {
                     null
                 }
 
-                val conversionRate = if (selectedValuationMode == ValuationMode.CONTRACT_SIZE) {
+                val conversionRate = if (
+                    selectedValuationMode == ValuationMode.CONTRACT_SIZE ||
+                    commissionMode == CommissionMode.PERCENT_NOTIONAL
+                ) {
                     parsePositiveNumber(conversionRateInput) ?: run {
                         errorMessage = "Enter valid quote->account conversion rate."
                         return@Button
@@ -673,7 +779,10 @@ private fun LotCalculatorScreen() {
                     fixedLot = fixedLot,
                     sizingAdjustmentMode = sizingAdjustmentMode,
                     spread = spread,
-                    commissionPerLot = commissionPerLot,
+                    commissionMode = commissionMode,
+                    fixedCommissionPerLot = fixedCommissionPerLot,
+                    commissionPercent = commissionPercent,
+                    commissionCurrencyRate = commissionCurrencyRate,
                     extraCostsPerLot = extraCostsPerLot,
                     accountBalanceForRiskPercent = balanceReference,
                     minLot = minLot,
@@ -711,7 +820,11 @@ private fun LotCalculatorScreen() {
                         style = MaterialTheme.typography.bodyLarge
                     )
                     Text(
-                        text = "Sizing Mode: ${result.sizingAdjustmentMode.label}",
+                        text = "Lot Mode: ${result.positionSizeMode.label}",
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                    Text(
+                        text = "Adjustment Mode: ${result.sizingAdjustmentMode.label}",
                         style = MaterialTheme.typography.bodyLarge
                     )
                     Text(
@@ -805,26 +918,41 @@ private fun SectionTitle(title: String) {
     )
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun EnumSelector(
     options: List<Pair<String, String>>,
     selectedName: String,
     onSelect: (String) -> Unit
 ) {
-    Column(modifier = Modifier.fillMaxWidth()) {
-        options.forEach { (name, label) ->
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable(role = Role.RadioButton) { onSelect(name) }
-                    .padding(vertical = 2.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                RadioButton(
-                    selected = selectedName == name,
-                    onClick = { onSelect(name) }
+    var expanded by remember { mutableStateOf(false) }
+    val selectedLabel = options.firstOrNull { it.first == selectedName }?.second ?: selectedName
+
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = !expanded }
+    ) {
+        OutlinedTextField(
+            value = selectedLabel,
+            onValueChange = {},
+            readOnly = true,
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            modifier = Modifier
+                .menuAnchor()
+                .fillMaxWidth()
+        )
+        ExposedDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false }
+        ) {
+            options.forEach { (name, label) ->
+                DropdownMenuItem(
+                    text = { Text(label) },
+                    onClick = {
+                        onSelect(name)
+                        expanded = false
+                    }
                 )
-                Text(text = label)
             }
         }
     }
@@ -875,7 +1003,10 @@ private fun calculateMt5Lot(
     fixedLot: Double?,
     sizingAdjustmentMode: SizingAdjustmentMode,
     spread: Double,
-    commissionPerLot: Double,
+    commissionMode: CommissionMode,
+    fixedCommissionPerLot: Double,
+    commissionPercent: Double?,
+    commissionCurrencyRate: Double?,
     extraCostsPerLot: Double,
     accountBalanceForRiskPercent: Double?,
     minLot: Double,
@@ -929,6 +1060,19 @@ private fun calculateMt5Lot(
         slDistanceDisplay = slDistancePrice
         tpDistanceDisplay = tpDistancePrice
         distanceUnitLabel = "price"
+    }
+
+    val commissionPerLot = when (commissionMode) {
+        CommissionMode.NONE -> 0.0
+        CommissionMode.FIXED_PER_LOT -> fixedCommissionPerLot
+        CommissionMode.PERCENT_NOTIONAL -> {
+            val safeContractSize = contractSize ?: 0.0
+            val safeQuoteToAccountRate = conversionRate ?: 1.0
+            val safeCommissionPercent = commissionPercent ?: 0.0
+            val safeCommissionCurrencyRate = commissionCurrencyRate ?: 1.0
+            val notionalAccount = entryPrice * safeContractSize * safeQuoteToAccountRate
+            (notionalAccount * (safeCommissionPercent / 100.0)) * safeCommissionCurrencyRate
+        }
     }
 
     val totalCostsPerLot = commissionPerLot + extraCostsPerLot
@@ -1005,6 +1149,7 @@ private fun calculateMt5Lot(
         takeProfitPrice = takeProfitPrice,
         expectedRewardAmount = expectedRewardAmount,
         actualRr = actualRr,
+        positionSizeMode = positionSizeMode,
         valuationMode = valuationMode,
         sizingAdjustmentMode = sizingAdjustmentMode,
         warnings = warnings

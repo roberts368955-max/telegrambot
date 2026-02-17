@@ -5,14 +5,17 @@ Android app for MetaTrader 5 style position sizing.
 ## Features
 
 - Dynamic lot sizing for forex, metals, and crypto
+- Dark mode friendly Material 3 UI
+- Compact dropdown selectors (less scrolling)
 - Two valuation engines:
   - **MT5 Tick Value mode** (Tick Value Loss + Tick Value Profit)
   - **Contract Size mode** (Contract Size + Quote->Account conversion)
 - Quick presets:
   - Forex majors (EURUSD-like)
-  - Metals (XAUUSD typical)
-  - Metals (XAGUSD typical)
-  - Crypto CFD (BTCUSD / ETHUSD 10 coins per lot common)
+  - XAUUSD (FTMO style)
+  - XAGUSD (FTMO style)
+  - BTCUSD (FTMO style)
+  - ETHUSD (FTMO style)
   - Custom symbol
 - Risk mode options:
   - Risk % of balance
@@ -23,6 +26,10 @@ Android app for MetaTrader 5 style position sizing.
 - Sizing adjustment mode:
   - Price move only (quick style)
   - Include spread + costs
+- Commission mode options:
+  - No commission
+  - Fixed amount per lot
+  - Percent of notional
 - Take profit options:
   - Fixed R:R
   - Manual TP price
