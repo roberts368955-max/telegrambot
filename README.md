@@ -4,10 +4,15 @@ Android app for MetaTrader 5 style position sizing.
 
 ## Features
 
-- Dynamic lot sizing using MT5 symbol parameters:
-  - Tick Size
-  - Tick Value (for 1.0 lot)
-  - Min Lot / Lot Step / Max Lot
+- Dynamic lot sizing for forex, metals, and crypto
+- Two valuation engines:
+  - **MT5 Tick Value mode** (Tick Value Loss + Tick Value Profit)
+  - **Contract Size mode** (Contract Size + Quote->Account conversion)
+- Quick presets:
+  - Forex majors (EURUSD-like)
+  - Metals (XAUUSD typical)
+  - Crypto CFD (BTCUSD typical)
+  - Custom symbol
 - Risk mode options:
   - Risk % of balance
   - Fixed SL in currency
@@ -18,15 +23,29 @@ Android app for MetaTrader 5 style position sizing.
 - Output includes:
   - Requested risk and actual risk
   - Raw lot and normalized lot
-  - SL points and SL cost per 1 lot
+  - SL/TP distance (ticks or price distance, depending on mode)
+  - SL cost per 1 lot
   - TP price, expected reward, and actual R:R
 
 ## Core logic
 
-- `stopLossPoints = abs(entryPrice - stopLossPrice) / tickSize`
-- `stopLossCostPerLot = stopLossPoints * tickValue`
+### MT5 Tick Value mode
+
+- `slTicks = ceil(abs(entry - sl) / tickSize)`
+- `tpTicks = floor(abs(tp - entry) / tickSize)`
+- `stopLossCostPerLot = slTicks * tickValueLoss`
+- `rewardPerLot = tpTicks * tickValueProfit`
+
+### Contract Size mode
+
+- `valuePerPriceUnitPerLot = contractSize * conversionRate`
+- `stopLossCostPerLot = abs(entry - sl) * valuePerPriceUnitPerLot`
+- `rewardPerLot = abs(tp - entry) * valuePerPriceUnitPerLot`
+
+Then:
+
 - `rawLot = requestedRiskAmount / stopLossCostPerLot`
-- `normalizedLot` is adjusted to broker limits and lot step
+- `normalizedLot` is adjusted to broker min/step/max
 
 ## Build APK
 
@@ -67,6 +86,18 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
 If you copy APK manually to the phone, enable install from unknown sources for your file manager.
+
+## Accuracy checklist (important)
+
+For best results, copy values from **MT5 Symbol Specification**:
+
+- Tick Size
+- Tick Value Loss
+- Tick Value Profit
+- Contract Size
+- Volume min/step/max
+
+If account currency is different from quote currency, set conversion rate accordingly in Contract Size mode.
 
 ## Build APK on GitHub (no local SDK needed)
 

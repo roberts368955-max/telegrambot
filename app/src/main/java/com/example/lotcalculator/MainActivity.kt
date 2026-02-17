@@ -4,6 +4,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Alignment
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -28,7 +29,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import java.math.BigDecimal
 import java.util.Locale
 import kotlin.math.abs
+import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.max
 
@@ -69,24 +70,94 @@ private enum class TakeProfitMode(val label: String) {
     MANUAL_PRICE("Manual TP price")
 }
 
+private enum class ValuationMode(val label: String) {
+    MT5_TICK_VALUE("MT5 Tick Value (loss/profit)"),
+    CONTRACT_SIZE("Contract Size + conversion")
+}
+
+private data class SymbolPresetValues(
+    val tickSize: String,
+    val tickValueLoss: String,
+    val tickValueProfit: String,
+    val contractSize: String,
+    val conversionRate: String,
+    val minLot: String,
+    val lotStep: String,
+    val maxLot: String
+)
+
+private enum class SymbolPreset(
+    val label: String,
+    val values: SymbolPresetValues?
+) {
+    FOREX_MAJOR(
+        label = "Forex majors (EURUSD-like)",
+        values = SymbolPresetValues(
+            tickSize = "0.00001",
+            tickValueLoss = "1",
+            tickValueProfit = "1",
+            contractSize = "100000",
+            conversionRate = "1",
+            minLot = "0.01",
+            lotStep = "0.01",
+            maxLot = "100"
+        )
+    ),
+    XAUUSD(
+        label = "Metals (XAUUSD typical)",
+        values = SymbolPresetValues(
+            tickSize = "0.01",
+            tickValueLoss = "1",
+            tickValueProfit = "1",
+            contractSize = "100",
+            conversionRate = "1",
+            minLot = "0.01",
+            lotStep = "0.01",
+            maxLot = "100"
+        )
+    ),
+    BTCUSD(
+        label = "Crypto CFD (BTCUSD typical)",
+        values = SymbolPresetValues(
+            tickSize = "0.01",
+            tickValueLoss = "0.01",
+            tickValueProfit = "0.01",
+            contractSize = "1",
+            conversionRate = "1",
+            minLot = "0.01",
+            lotStep = "0.01",
+            maxLot = "100"
+        )
+    ),
+    CUSTOM(
+        label = "Custom symbol",
+        values = null
+    )
+}
+
 private data class Mt5LotCalculation(
     val requestedRiskAmount: Double,
     val actualRiskAmount: Double,
     val stopLossCostPerLot: Double,
-    val stopLossPoints: Double,
+    val stopLossDistanceDisplay: Double,
+    val takeProfitDistanceDisplay: Double,
+    val distanceUnitLabel: String,
     val rawLotSize: Double,
     val normalizedLotSize: Double,
     val takeProfitPrice: Double,
     val expectedRewardAmount: Double,
     val actualRr: Double,
+    val valuationMode: ValuationMode,
     val warnings: List<String>
 )
 
 @Composable
 private fun LotCalculatorScreen() {
+    var symbolPresetName by rememberSaveable { mutableStateOf(SymbolPreset.FOREX_MAJOR.name) }
     var tradeSideName by rememberSaveable { mutableStateOf(TradeSide.BUY.name) }
     var riskModeName by rememberSaveable { mutableStateOf(RiskMode.PERCENT.name) }
     var tpModeName by rememberSaveable { mutableStateOf(TakeProfitMode.FIXED_RR.name) }
+    var valuationModeName by rememberSaveable { mutableStateOf(ValuationMode.CONTRACT_SIZE.name) }
 
     var balanceInput by rememberSaveable { mutableStateOf("10000") }
     var riskPercentInput by rememberSaveable { mutableStateOf("1") }
@@ -97,8 +168,12 @@ private fun LotCalculatorScreen() {
     var rrInput by rememberSaveable { mutableStateOf("2") }
     var manualTpPriceInput by rememberSaveable { mutableStateOf("1.11000") }
 
-    var tickSizeInput by rememberSaveable { mutableStateOf("0.0001") }
-    var tickValueInput by rememberSaveable { mutableStateOf("10") }
+    var tickSizeInput by rememberSaveable { mutableStateOf("0.00001") }
+    var tickValueLossInput by rememberSaveable { mutableStateOf("1") }
+    var tickValueProfitInput by rememberSaveable { mutableStateOf("1") }
+    var contractSizeInput by rememberSaveable { mutableStateOf("100000") }
+    var conversionRateInput by rememberSaveable { mutableStateOf("1") }
+
     var minLotInput by rememberSaveable { mutableStateOf("0.01") }
     var lotStepInput by rememberSaveable { mutableStateOf("0.01") }
     var maxLotInput by rememberSaveable { mutableStateOf("100") }
@@ -120,11 +195,33 @@ private fun LotCalculatorScreen() {
         )
         Spacer(modifier = Modifier.height(8.dp))
         Text(
-            text = "Dynamic lot sizing with risk mode, fixed R:R and broker limits.",
+            text = "Supports forex, metals and crypto with MT5-aware sizing.",
             style = MaterialTheme.typography.bodyMedium
         )
 
         Spacer(modifier = Modifier.height(20.dp))
+        SectionTitle("Quick Symbol Preset")
+        EnumSelector(
+            options = SymbolPreset.entries.map { it.name to it.label },
+            selectedName = symbolPresetName,
+            onSelect = { selectedName ->
+                symbolPresetName = selectedName
+                val preset = SymbolPreset.valueOf(selectedName)
+                val values = preset.values
+                if (values != null) {
+                    tickSizeInput = values.tickSize
+                    tickValueLossInput = values.tickValueLoss
+                    tickValueProfitInput = values.tickValueProfit
+                    contractSizeInput = values.contractSize
+                    conversionRateInput = values.conversionRate
+                    minLotInput = values.minLot
+                    lotStepInput = values.lotStep
+                    maxLotInput = values.maxLot
+                }
+            }
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
         SectionTitle("Trade Setup")
         EnumSelector(
             options = TradeSide.entries.map { it.name to it.label },
@@ -208,23 +305,58 @@ private fun LotCalculatorScreen() {
         }
 
         Spacer(modifier = Modifier.height(12.dp))
-        SectionTitle("MT5 Symbol Settings")
+        SectionTitle("Symbol Valuation Model")
+        EnumSelector(
+            options = ValuationMode.entries.map { it.name to it.label },
+            selectedName = valuationModeName,
+            onSelect = { valuationModeName = it }
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
         NumericInputField(
             value = tickSizeInput,
             onValueChange = { tickSizeInput = it },
             label = "Tick Size",
-            placeholder = "e.g. 0.0001"
+            placeholder = "e.g. 0.00001 or 0.01"
         )
 
-        Spacer(modifier = Modifier.height(12.dp))
-        NumericInputField(
-            value = tickValueInput,
-            onValueChange = { tickValueInput = it },
-            label = "Tick Value (for 1.0 lot)",
-            placeholder = "e.g. 10"
-        )
+        val valuationMode = ValuationMode.valueOf(valuationModeName)
+        if (valuationMode == ValuationMode.MT5_TICK_VALUE) {
+            Spacer(modifier = Modifier.height(12.dp))
+            NumericInputField(
+                value = tickValueLossInput,
+                onValueChange = { tickValueLossInput = it },
+                label = "Tick Value Loss (1.0 lot)",
+                placeholder = "from MT5 symbol specification"
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+            NumericInputField(
+                value = tickValueProfitInput,
+                onValueChange = { tickValueProfitInput = it },
+                label = "Tick Value Profit (1.0 lot)",
+                placeholder = "from MT5 symbol specification"
+            )
+        } else {
+            Spacer(modifier = Modifier.height(12.dp))
+            NumericInputField(
+                value = contractSizeInput,
+                onValueChange = { contractSizeInput = it },
+                label = "Contract Size (1.0 lot)",
+                placeholder = "e.g. 100000 forex, 100 XAU, 1 BTC CFD"
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+            NumericInputField(
+                value = conversionRateInput,
+                onValueChange = { conversionRateInput = it },
+                label = "Quote->Account currency conversion",
+                placeholder = "1 if already same currency"
+            )
+        }
 
         Spacer(modifier = Modifier.height(12.dp))
+        SectionTitle("Broker Volume Limits")
         NumericInputField(
             value = minLotInput,
             onValueChange = { minLotInput = it },
@@ -257,11 +389,11 @@ private fun LotCalculatorScreen() {
                 val tradeSide = TradeSide.valueOf(tradeSideName)
                 val riskMode = RiskMode.valueOf(riskModeName)
                 val tpMode = TakeProfitMode.valueOf(tpModeName)
+                val selectedValuationMode = ValuationMode.valueOf(valuationModeName)
 
                 val entryPrice = parsePositiveNumber(entryPriceInput)
                 val stopLossPrice = parsePositiveNumber(stopLossPriceInput)
                 val tickSize = parsePositiveNumber(tickSizeInput)
-                val tickValue = parsePositiveNumber(tickValueInput)
                 val minLot = parsePositiveNumber(minLotInput)
                 val lotStep = parsePositiveNumber(lotStepInput)
                 val maxLot = parsePositiveNumber(maxLotInput)
@@ -270,7 +402,6 @@ private fun LotCalculatorScreen() {
                     entryPrice == null ||
                     stopLossPrice == null ||
                     tickSize == null ||
-                    tickValue == null ||
                     minLot == null ||
                     lotStep == null ||
                     maxLot == null
@@ -353,14 +484,65 @@ private fun LotCalculatorScreen() {
                     }
                 }
 
+                val tpDistance = abs(takeProfitPrice - entryPrice)
+                if (selectedValuationMode == ValuationMode.MT5_TICK_VALUE) {
+                    if (stopLossDistance < tickSize) {
+                        errorMessage = "SL distance must be at least one tick for MT5 tick-value mode."
+                        return@Button
+                    }
+                    if (tpDistance < tickSize) {
+                        errorMessage = "TP distance must be at least one tick for MT5 tick-value mode."
+                        return@Button
+                    }
+                }
+
+                val tickValueLoss = if (selectedValuationMode == ValuationMode.MT5_TICK_VALUE) {
+                    parsePositiveNumber(tickValueLossInput) ?: run {
+                        errorMessage = "Enter valid Tick Value Loss for MT5 mode."
+                        return@Button
+                    }
+                } else {
+                    null
+                }
+
+                val tickValueProfit = if (selectedValuationMode == ValuationMode.MT5_TICK_VALUE) {
+                    parsePositiveNumber(tickValueProfitInput) ?: run {
+                        errorMessage = "Enter valid Tick Value Profit for MT5 mode."
+                        return@Button
+                    }
+                } else {
+                    null
+                }
+
+                val contractSize = if (selectedValuationMode == ValuationMode.CONTRACT_SIZE) {
+                    parsePositiveNumber(contractSizeInput) ?: run {
+                        errorMessage = "Enter valid contract size for Contract Size mode."
+                        return@Button
+                    }
+                } else {
+                    null
+                }
+
+                val conversionRate = if (selectedValuationMode == ValuationMode.CONTRACT_SIZE) {
+                    parsePositiveNumber(conversionRateInput) ?: run {
+                        errorMessage = "Enter valid quote->account conversion rate."
+                        return@Button
+                    }
+                } else {
+                    null
+                }
+
                 calculationResult = calculateMt5Lot(
-                    tradeSide = tradeSide,
                     requestedRiskAmount = requestedRiskAmount,
                     entryPrice = entryPrice,
                     stopLossPrice = stopLossPrice,
                     takeProfitPrice = takeProfitPrice,
+                    valuationMode = selectedValuationMode,
                     tickSize = tickSize,
-                    tickValue = tickValue,
+                    tickValueLoss = tickValueLoss,
+                    tickValueProfit = tickValueProfit,
+                    contractSize = contractSize,
+                    conversionRate = conversionRate,
                     minLot = minLot,
                     maxLot = maxLot,
                     lotStep = lotStep
@@ -392,6 +574,10 @@ private fun LotCalculatorScreen() {
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
+                        text = "Valuation Model: ${result.valuationMode.label}",
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                    Text(
                         text = "Requested Risk: ${formatValue(result.requestedRiskAmount)}",
                         style = MaterialTheme.typography.bodyLarge
                     )
@@ -404,7 +590,11 @@ private fun LotCalculatorScreen() {
                         style = MaterialTheme.typography.bodyLarge
                     )
                     Text(
-                        text = "SL Distance: ${formatValue(result.stopLossPoints, 1)} points",
+                        text = "SL Distance: ${formatValue(result.stopLossDistanceDisplay, 2)} ${result.distanceUnitLabel}",
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                    Text(
+                        text = "TP Distance: ${formatValue(result.takeProfitDistanceDisplay, 2)} ${result.distanceUnitLabel}",
                         style = MaterialTheme.typography.bodyLarge
                     )
                     Text(
@@ -502,51 +692,96 @@ private fun parsePositiveNumber(rawValue: String): Double? {
 }
 
 private fun calculateMt5Lot(
-    tradeSide: TradeSide,
     requestedRiskAmount: Double,
     entryPrice: Double,
     stopLossPrice: Double,
     takeProfitPrice: Double,
+    valuationMode: ValuationMode,
     tickSize: Double,
-    tickValue: Double,
+    tickValueLoss: Double?,
+    tickValueProfit: Double?,
+    contractSize: Double?,
+    conversionRate: Double?,
     minLot: Double,
     maxLot: Double,
     lotStep: Double
 ): Mt5LotCalculation {
-    val stopLossDistance = abs(entryPrice - stopLossPrice)
-    val stopLossPoints = stopLossDistance / tickSize
-    val stopLossCostPerLot = stopLossPoints * tickValue
-    val rawLotSize = requestedRiskAmount / stopLossCostPerLot
+    val warnings = mutableListOf<String>()
+    val slDistancePrice = abs(entryPrice - stopLossPrice)
+    val tpDistancePrice = abs(takeProfitPrice - entryPrice)
 
-    val (normalizedLot, warnings) = normalizeLotSize(
+    val stopLossCostPerLot: Double
+    val rewardPerLot: Double
+    val slDistanceDisplay: Double
+    val tpDistanceDisplay: Double
+    val distanceUnitLabel: String
+
+    if (valuationMode == ValuationMode.MT5_TICK_VALUE) {
+        val safeTickValueLoss = tickValueLoss ?: 0.0
+        val safeTickValueProfit = tickValueProfit ?: 0.0
+
+        val rawSlTicks = slDistancePrice / tickSize
+        val rawTpTicks = tpDistancePrice / tickSize
+        val slTicks = ceil(rawSlTicks - 1e-9)
+        val tpTicks = floor(rawTpTicks + 1e-9)
+
+        if (abs(rawSlTicks - slTicks) > 1e-9) {
+            warnings += "SL distance was rounded up to full ticks for risk safety."
+        }
+        if (abs(rawTpTicks - tpTicks) > 1e-9) {
+            warnings += "TP distance was rounded down to full ticks."
+        }
+        if (tpTicks <= 0.0) {
+            warnings += "TP distance is below one tick after rounding; expected reward may be 0."
+        }
+
+        stopLossCostPerLot = slTicks * safeTickValueLoss
+        rewardPerLot = tpTicks * safeTickValueProfit
+        slDistanceDisplay = slTicks
+        tpDistanceDisplay = tpTicks
+        distanceUnitLabel = "ticks"
+    } else {
+        val safeContractSize = contractSize ?: 0.0
+        val safeConversionRate = conversionRate ?: 0.0
+        val valuePerPriceUnit = safeContractSize * safeConversionRate
+
+        stopLossCostPerLot = slDistancePrice * valuePerPriceUnit
+        rewardPerLot = tpDistancePrice * valuePerPriceUnit
+        slDistanceDisplay = slDistancePrice
+        tpDistanceDisplay = tpDistancePrice
+        distanceUnitLabel = "price"
+    }
+
+    val rawLotSize = requestedRiskAmount / stopLossCostPerLot
+    val (normalizedLot, lotWarnings) = normalizeLotSize(
         rawLot = rawLotSize,
         minLot = minLot,
         maxLot = maxLot,
         lotStep = lotStep
     )
+    warnings += lotWarnings
 
     val actualRiskAmount = stopLossCostPerLot * normalizedLot
-
-    val takeProfitDistance = if (tradeSide == TradeSide.BUY) {
-        takeProfitPrice - entryPrice
-    } else {
-        entryPrice - takeProfitPrice
-    }
-    val takeProfitPoints = takeProfitDistance / tickSize
-    val rewardPerLot = takeProfitPoints * tickValue
     val expectedRewardAmount = rewardPerLot * normalizedLot
-    val actualRr = expectedRewardAmount / actualRiskAmount
+    val actualRr = if (actualRiskAmount > 0.0) {
+        expectedRewardAmount / actualRiskAmount
+    } else {
+        0.0
+    }
 
     return Mt5LotCalculation(
         requestedRiskAmount = requestedRiskAmount,
         actualRiskAmount = actualRiskAmount,
         stopLossCostPerLot = stopLossCostPerLot,
-        stopLossPoints = stopLossPoints,
+        stopLossDistanceDisplay = slDistanceDisplay,
+        takeProfitDistanceDisplay = tpDistanceDisplay,
+        distanceUnitLabel = distanceUnitLabel,
         rawLotSize = rawLotSize,
         normalizedLotSize = normalizedLot,
         takeProfitPrice = takeProfitPrice,
         expectedRewardAmount = expectedRewardAmount,
         actualRr = actualRr,
+        valuationMode = valuationMode,
         warnings = warnings
     )
 }
