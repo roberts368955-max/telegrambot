@@ -1,9 +1,28 @@
 <!DOCTYPE html>
 <html>
-<head><title>Telegram Bot</title></head>
-<body style="font-family:sans-serif; text-align:center; background:#111; color:white; padding:20px;">
-  <h2>BasketCloseBot Active</h2>
-  <p>Use Telegram commands: SET PL 500, SET TIME 22:00 UTC, STATUS</p>
-  <p>Plugin loaded in cTrader.</p>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MT5 EA + Indicator for Android Workflow</title>
+</head>
+<body style="font-family:sans-serif; background:#111; color:#fff; max-width:900px; margin:0 auto; padding:24px; line-height:1.5;">
+  <h1>MT5 EA + Custom Indicator</h1>
+  <p>This repository includes:</p>
+  <ul>
+    <li><code>mt5/Experts/EMA_Cross_EA.mq5</code></li>
+    <li><code>mt5/Indicators/EMA_Cross_Arrows.mq5</code></li>
+  </ul>
+
+  <h2>Android MT5 Limitation</h2>
+  <p>
+    MT5 Android cannot run EAs or custom indicators directly.
+    Run them on MT5 Desktop or MQL5 VPS, then monitor and manage trades from Android.
+  </p>
+
+  <h2>Strategy Included</h2>
+  <p>
+    Both files use an EMA crossover model (default 20/50).
+    The EA can open/close trades on crossover; the indicator plots buy/sell arrows.
+  </p>
 </body>
 </html>
